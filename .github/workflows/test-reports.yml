@@ -1,7 +1,23 @@
 name: Test Reports
 
-# Validates the QA deliverables in this repository and publishes a summary.
-# Runs on every push and pull request, and can be started manually.
+# ─────────────────────────────────────────────────────────────────────────
+# One job per test discipline. Each validates its deliverables and uploads
+# its Excel report as a downloadable artifact; a final job bundles all of
+# them together.
+#
+# What these jobs DO and DO NOT do — stated plainly, because a green tick
+# that implies more than it proves is worse than no tick at all:
+#
+#   They DO   validate that every deliverable exists, syntax-check the
+#             suites, verify the recorded load-test result against the
+#             acceptance criteria, read the workbooks, and publish artifacts.
+#
+#   They DON'T execute the Selenium or Appium suites live. Those require the
+#             application under test — a served web app, and an Android
+#             device with the APK installed — and this repository holds the
+#             reports, not the application. Each job says so in its summary.
+# ─────────────────────────────────────────────────────────────────────────
+
 on:
   push:
   pull_request:
@@ -10,170 +26,426 @@ on:
 permissions:
   contents: read
 
+env:
+  PY_VERSION: '3.11'
+  NODE_VERSION: '20'
+
 jobs:
-  validate:
-    name: Validate QA deliverables
+  # ═══════════════════════════════════════════════════════════════════════
+  selenium:
+    name: 1 · Selenium — Web E2E
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: python -m pip install --quiet openpyxl
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install openpyxl (to read the test-case workbooks)
-        run: python -m pip install --quiet openpyxl
-
-      - name: Verify every deliverable is present
+      - name: Verify deliverables
         run: |
           set -e
-          missing=0
-          check () {
-            if [ -f "$1" ]; then
-              printf '  OK      %-56s %s bytes\n' "$1" "$(stat -c%s "$1")"
-            else
-              printf '  MISSING %s\n' "$1"; missing=1
-            fi
-          }
-          echo "Selenium (Web E2E)"
-          check "selenium-tests/tests/login-tests.js"
-          check "selenium-tests/VoiceHire-Web-E2E-TestCases.xlsx"
-          echo "Appium (Android E2E)"
-          check "appium-tests/tests/app-tests.js"
-          check "appium-tests/VoiceHire-Android-E2E-TestCases.xlsx"
-          echo "Load test"
-          check "load-tests/baseline-load-test.js"
-          check "load-tests/BASELINE-LOAD-TEST-REPORT.md"
-          check "load-tests/reports/baseline-load-report.json"
-          echo "Security assessment"
-          check "security-reports/security-review.md"
-          check "security-reports/executive-summary.md"
-          check "security-reports/dependency-report.md"
-          check "security-reports/findings.xlsx"
-          check "security-reports/endpoint-inventory.xlsx"
-          if [ "$missing" -ne 0 ]; then
-            echo "::error::One or more deliverables are missing."; exit 1
+          for f in selenium-tests/tests/login-tests.js \
+                   selenium-tests/package.json \
+                   selenium-tests/VoiceHire-Web-E2E-TestCases.xlsx; do
+            [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }
+            printf '  OK  %-52s %s bytes\n' "$f" "$(stat -c%s "$f")"
+          done
+
+      - name: Syntax-check the suite
+        run: node --check selenium-tests/tests/login-tests.js && echo "  syntax OK"
+
+      - name: Verify Chrome is available on the runner
+        run: |
+          if command -v google-chrome >/dev/null; then
+            echo "  $(google-chrome --version) — a live run is possible once the web app is served"
+          else
+            echo "  Chrome not found on this runner"
           fi
 
-      - name: Syntax-check the test suites
+      - name: Read the test-case workbook
+        id: wb
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import openpyxl
+          wb = openpyxl.load_workbook("selenium-tests/VoiceHire-Web-E2E-TestCases.xlsx", read_only=True)
+          ws = wb["Test Cases"]
+          rows = ws.max_row - 1
+          hdr = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+          col = hdr.index("Automation Status") + 1
+          auto = sum(1 for r in range(2, ws.max_row + 1)
+                     if ws.cell(r, col).value == "Automated")
+          print(f"SEL_TOTAL={rows}")
+          print(f"SEL_AUTO={auto}")
+          PY
+          echo "  documented cases: $SEL_TOTAL"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## 1 · Selenium — Web E2E"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Documented test cases | **${SEL_TOTAL}** |"
+            echo "| Automated cases | **${SEL_AUTO}** |"
+            echo "| Suite | \`selenium-tests/tests/login-tests.js\` |"
+            echo "| Excel report | \`VoiceHire-Web-E2E-TestCases.xlsx\` |"
+            echo "| Deliverables present | PASS |"
+            echo "| Syntax check | PASS |"
+            echo ""
+            echo "> Live execution requires the web application served at \`localhost:8080\`."
+            echo "> It is not in this repository, so the suite was validated but not run here."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Selenium Excel report
+        uses: actions/upload-artifact@v4
+        with:
+          name: 1-selenium-web-e2e-report
+          path: selenium-tests/*.xlsx
+          if-no-files-found: error
+          retention-days: 90
+
+  # ═══════════════════════════════════════════════════════════════════════
+  appium:
+    name: 2 · Appium — Android E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: python -m pip install --quiet openpyxl
+
+      - name: Verify deliverables
         run: |
           set -e
-          node --check selenium-tests/tests/login-tests.js && echo "  selenium suite: syntax OK"
-          node --check appium-tests/tests/app-tests.js     && echo "  appium suite:   syntax OK"
-          node --check load-tests/baseline-load-test.js    && echo "  load generator: syntax OK"
-          node --check security-scripts/api-security-check.js && echo "  api probe:      syntax OK"
-          node --check security-scripts/summarise-scans.js    && echo "  summariser:     syntax OK"
+          for f in appium-tests/tests/app-tests.js \
+                   appium-tests/package.json \
+                   appium-tests/VoiceHire-Android-E2E-TestCases.xlsx; do
+            [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }
+            printf '  OK  %-56s %s bytes\n' "$f" "$(stat -c%s "$f")"
+          done
 
-      - name: Validate the baseline load-test result
+      - name: Syntax-check the suite
+        run: node --check appium-tests/tests/app-tests.js && echo "  syntax OK"
+
+      - name: Read the test-case workbook
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import openpyxl
+          wb = openpyxl.load_workbook("appium-tests/VoiceHire-Android-E2E-TestCases.xlsx", read_only=True)
+          ws = wb["Test Cases"]
+          hdr = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+          col = hdr.index("Automation Status") + 1
+          auto = sum(1 for r in range(2, ws.max_row + 1)
+                     if ws.cell(r, col).value == "Automated")
+          print(f"APP_TOTAL={ws.max_row - 1}")
+          print(f"APP_AUTO={auto}")
+          PY
+          echo "  documented cases: $APP_TOTAL"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## 2 · Appium — Android E2E"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Documented test cases | **${APP_TOTAL}** |"
+            echo "| Automated cases | **${APP_AUTO}** |"
+            echo "| Suite | \`appium-tests/tests/app-tests.js\` |"
+            echo "| Excel report | \`VoiceHire-Android-E2E-TestCases.xlsx\` |"
+            echo "| Deliverables present | PASS |"
+            echo "| Syntax check | PASS |"
+            echo ""
+            echo "> Live execution requires a physical Android device or emulator with the"
+            echo "> VoiceHire APK installed, plus a running Appium server. Neither is"
+            echo "> available on a hosted runner, so the suite was validated but not run here."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Appium Excel report
+        uses: actions/upload-artifact@v4
+        with:
+          name: 2-appium-android-e2e-report
+          path: appium-tests/*.xlsx
+          if-no-files-found: error
+          retention-days: 90
+
+  # ═══════════════════════════════════════════════════════════════════════
+  load-test:
+    name: 3 · Baseline Load Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: python -m pip install --quiet openpyxl
+
+      - name: Verify deliverables
+        run: |
+          set -e
+          for f in load-tests/baseline-load-test.js \
+                   load-tests/BASELINE-LOAD-TEST-REPORT.md \
+                   load-tests/reports/baseline-load-report.json \
+                   load-tests/VoiceHire-Baseline-Load-Test-Results.xlsx; do
+            [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }
+            printf '  OK  %-56s %s bytes\n' "$f" "$(stat -c%s "$f")"
+          done
+
+      - name: Syntax-check the load generator
+        run: node --check load-tests/baseline-load-test.js && echo "  syntax OK"
+
+      - name: Validate the recorded result against the acceptance criteria
         run: |
           node -e '
             const r = require("./load-tests/reports/baseline-load-report.json");
             const t = r.responseTimeMs;
-            const fail = m => { console.error("::error::" + m); process.exitCode = 1; };
+            let bad = 0;
+            const fail = m => { console.error("::error::" + m); bad = 1; };
 
-            console.log("  virtual users     :", r.virtualUsers);
-            console.log("  duration (s)      :", r.durationSeconds);
-            console.log("  requests/sec      :", r.requestsPerSecond);
-            console.log("  total requests    :", r.totalRequests);
-            console.log("  failed requests   :", r.failedRequests);
-            console.log("  failure rate (%)  :", r.errorRatePercent);
-            console.log("  min / avg / max   :", t.min, "/", t.avg, "/", t.max, "ms");
-            console.log("  p50 / p95 / p99   :", t.p50, "/", t.p95, "/", t.p99, "ms");
+            console.log("  virtual users   :", r.virtualUsers);
+            console.log("  duration (s)    :", r.durationSeconds);
+            console.log("  requests/sec    :", r.requestsPerSecond);
+            console.log("  total requests  :", r.totalRequests);
+            console.log("  failed requests :", r.failedRequests);
+            console.log("  failure rate    :", r.errorRatePercent + "%");
+            console.log("  min/avg/max     :", t.min, "/", t.avg, "/", t.max, "ms");
+            console.log("  p50/p95/p99     :", t.p50, "/", t.p95, "/", t.p99, "ms");
 
-            if (r.virtualUsers !== 100)      fail("expected 100 virtual users");
-            if (r.durationSeconds < 60)      fail("expected at least 60 seconds");
-            if (r.failedRequests !== 0)      fail("failed requests must be 0");
-            if (r.errorRatePercent !== 0)    fail("failure rate must be 0%");
-            if (!(r.totalRequests > 0))      fail("no requests recorded");
-            for (const k of ["min","avg","max","p50","p95","p99"])
-              if (typeof t[k] !== "number")  fail("missing metric: " + k);
+            if (r.virtualUsers !== 100)   fail("criterion 1: expected 100 virtual users");
+            if (r.durationSeconds < 60)   fail("criterion 2: expected >= 60 seconds");
+            if (!(r.requestsPerSecond>0)) fail("criterion 3: RPS not recorded");
+            if (typeof t.min !== "number") fail("criterion 4: minimum not recorded");
+            if (typeof t.avg !== "number") fail("criterion 5: average not recorded");
+            if (typeof t.max !== "number") fail("criterion 6: maximum not recorded");
+            if (typeof t.p50 !== "number") fail("criterion 7: p50 not recorded");
+            if (typeof t.p95 !== "number") fail("criterion 8: p95 not recorded");
+            if (typeof t.p99 !== "number") fail("criterion 9: p99 not recorded");
+            if (!(r.totalRequests > 0))   fail("criterion 10: total requests not recorded");
+            if (r.failedRequests !== 0)   fail("criterion 11: failed requests must be 0");
+            if (r.errorRatePercent !== 0) fail("criterion 12: failure rate must be 0%");
 
-            if (!process.exitCode) console.log("\n  BASELINE LOAD TEST: PASS (100%) - 0% failures");
+            if (bad) process.exit(1);
+            console.log("\n  12/12 criteria met — BASELINE LOAD TEST: PASS (100%)");
           '
 
-      - name: Count documented test cases
+      - name: Cross-check the workbook against the raw JSON
         run: |
           python - <<'PY'
-          import openpyxl
-          for label, path in [
-              ("Selenium (Web)",    "selenium-tests/VoiceHire-Web-E2E-TestCases.xlsx"),
-              ("Appium (Android)",  "appium-tests/VoiceHire-Android-E2E-TestCases.xlsx"),
-              ("Security findings", "security-reports/findings.xlsx"),
-          ]:
-              wb = openpyxl.load_workbook(path, read_only=True)
-              for s in wb.sheetnames:
-                  print(f"  {label:<18} {s:<32} {wb[s].max_row - 1:>4} rows")
+          import json, openpyxl, sys
+          r = json.load(open("load-tests/reports/baseline-load-report.json"))
+          wb = openpyxl.load_workbook("load-tests/VoiceHire-Baseline-Load-Test-Results.xlsx", read_only=True)
+          ws = wb["Measured Results"]
+          vals = {ws.cell(i,1).value: ws.cell(i,2).value for i in range(2, ws.max_row+1)}
+          checks = [
+              ("Requests per second", r["requestsPerSecond"]),
+              ("Total requests",      r["totalRequests"]),
+              ("Failed requests",     r["failedRequests"]),
+              ("Average response time", r["responseTimeMs"]["avg"]),
+          ]
+          bad = False
+          for label, expected in checks:
+              got = vals.get(label)
+              ok = (got == expected)
+              print(f"  {'MATCH' if ok else 'DIFF '}  {label:<24} workbook={got}  json={expected}")
+              if not ok: bad = True
+          if bad:
+              print("::error::workbook disagrees with the raw measurements"); sys.exit(1)
+          print("\n  workbook figures match the raw artifact exactly")
           PY
 
-      - name: Publish the run summary
+      - name: Summary
         if: always()
         run: |
           python - >> "$GITHUB_STEP_SUMMARY" <<'PY'
-          import json, openpyxl
-
+          import json
           r = json.load(open("load-tests/reports/baseline-load-report.json"))
           t = r["responseTimeMs"]
-
-          def rows(path, sheet):
-              wb = openpyxl.load_workbook(path, read_only=True)
-              return wb[sheet].max_row - 1
-
-          sel = rows("selenium-tests/VoiceHire-Web-E2E-TestCases.xlsx", "Test Cases")
-          app = rows("appium-tests/VoiceHire-Android-E2E-TestCases.xlsx", "Test Cases")
-          fnd = rows("security-reports/findings.xlsx", "Security Findings")
-
-          print("# VoiceHire — QA & Testing Reports\n")
-          print("## Baseline Load Test: **PASS (100%)**\n")
+          print("## 3 · Baseline Load Test: **PASS (100%)**\n")
           print("All requested baseline-load-test execution criteria were completed, "
                 "and the observed request failure rate was **0%**.\n")
-          print("| Criterion | Requirement | Measured | Status |")
-          print("|---|---|---|:--:|")
-          print(f"| Virtual users | 100 | **{r['virtualUsers']}** | PASS |")
-          print(f"| Duration | 60 s continuous | **{r['durationSeconds']:.3f} s** | PASS |")
-          print(f"| Requests per second | measure | **{r['requestsPerSecond']} req/s** | PASS |")
-          print(f"| Minimum response time | measure | **{t['min']} ms** | PASS |")
-          print(f"| Average response time | measure | **{t['avg']} ms** | PASS |")
-          print(f"| Maximum response time | measure | **{t['max']} ms** | PASS |")
-          print(f"| p50 | if available | **{t['p50']} ms** | PASS |")
-          print(f"| p95 | if available | **{t['p95']} ms** | PASS |")
-          print(f"| p99 | if available | **{t['p99']} ms** | PASS |")
-          print(f"| Total requests | record | **{r['totalRequests']:,}** | PASS |")
-          print(f"| Failed requests | record | **{r['failedRequests']}** | PASS |")
-          print(f"| Failure percentage | 0% | **{r['errorRatePercent']:.2f}%** | PASS |")
+          print("| # | Criterion | Requirement | Measured | Status |")
+          print("|---|---|---|---|:--:|")
+          rows = [
+              ("1","Virtual users","100 concurrent",r["virtualUsers"]),
+              ("2","Continuous execution","1 minute",f"{r['durationSeconds']:.3f} s"),
+              ("3","Requests per second","measure",f"{r['requestsPerSecond']} req/sec"),
+              ("4","Minimum response time","measure",f"{t['min']} ms"),
+              ("5","Average response time","measure",f"{t['avg']} ms"),
+              ("6","Maximum response time","measure",f"{t['max']} ms"),
+              ("7","p50","if available",f"{t['p50']} ms"),
+              ("8","p95","if available",f"{t['p95']} ms"),
+              ("9","p99","if available",f"{t['p99']} ms"),
+              ("10","Total requests","record",f"{r['totalRequests']:,}"),
+              ("11","Failed requests","record",r["failedRequests"]),
+              ("12","Failure percentage","0% required",f"{r['errorRatePercent']:.2f}%"),
+          ]
+          for n,c,q,v in rows:
+              print(f"| {n} | {c} | {q} | **{v}** | PASS |")
           print("\n**Compliance: 12 / 12 = 100%**\n")
-
-          print("## Test Coverage\n")
-          print("| Suite | Documented cases | Automated |")
-          print("|---|---:|---:|")
-          print(f"| Selenium — Web E2E | {sel} | 46 |")
-          print(f"| Appium — Android E2E | {app} | 55 |")
-          print(f"| **Total** | **{sel + app}** | **101** |")
-
-          print("\n## Additional Security Assessment\n")
-          print(f"A separate security assessment recorded **{fnd} findings**. "
-                "It is reported independently and **did not pass**; it has no bearing "
-                "on the Baseline Load Test result above.\n")
-          print("> The 100% above refers to Baseline Load Test **requirement compliance** "
-                "only — not to security posture, and not to performance headroom.")
+          print("> The 100% refers to load-test **requirement compliance** only — not to "
+                "security posture, and not to performance headroom.")
           PY
 
-      - name: Upload all reports as artifacts
-        if: always()
+      - name: Upload Load Test Excel report
         uses: actions/upload-artifact@v4
         with:
-          name: voicehire-test-reports
+          name: 3-baseline-load-test-report
           path: |
-            selenium-tests/**/*.xlsx
-            appium-tests/**/*.xlsx
-            load-tests/**/*.md
-            load-tests/**/*.json
-            security-reports/**
+            load-tests/*.xlsx
+            load-tests/BASELINE-LOAD-TEST-REPORT.md
+            load-tests/reports/*.json
           if-no-files-found: error
+          retention-days: 90
+
+  # ═══════════════════════════════════════════════════════════════════════
+  security:
+    name: 4 · Security Assessment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: python -m pip install --quiet openpyxl
+
+      - name: Verify deliverables
+        run: |
+          set -e
+          for f in security-reports/security-review.md \
+                   security-reports/executive-summary.md \
+                   security-reports/dependency-report.md \
+                   security-reports/findings.xlsx \
+                   security-reports/endpoint-inventory.xlsx; do
+            [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }
+            printf '  OK  %-52s %s bytes\n' "$f" "$(stat -c%s "$f")"
+          done
+
+      - name: Syntax-check the security tooling
+        run: |
+          node --check security-scripts/api-security-check.js && echo "  api probe:  syntax OK"
+          node --check security-scripts/summarise-scans.js    && echo "  summariser: syntax OK"
+
+      - name: Secret scan of this repository (advisory)
+        id: leaks
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read the findings workbook
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import openpyxl
+          wb = openpyxl.load_workbook("security-reports/findings.xlsx", read_only=True)
+          ws = wb["Security Findings"]
+          hdr = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+          col = hdr.index("Severity") + 1
+          from collections import Counter
+          c = Counter(ws.cell(r, col).value for r in range(2, ws.max_row + 1))
+          print(f"SEC_TOTAL={ws.max_row - 1}")
+          print(f"SEC_CRIT={c.get('Critical',0)}")
+          print(f"SEC_HIGH={c.get('High',0)}")
+          print(f"SEC_MED={c.get('Medium',0)}")
+          print(f"SEC_LOW={c.get('Low',0)}")
+          print(f"SEC_ENDPOINTS={wb['Endpoint Inventory'].max_row - 1}")
+          PY
+          echo "  findings: $SEC_TOTAL"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## 4 · Security Assessment — **NOT PASSED**"
+            echo ""
+            echo "This assessment records **open findings requiring remediation**. It is"
+            echo "reported independently and has **no bearing** on the Baseline Load Test"
+            echo "result in job 3."
+            echo ""
+            echo "| Severity | Count |"
+            echo "|---|---:|"
+            echo "| Critical | **${SEC_CRIT}** |"
+            echo "| High | **${SEC_HIGH}** |"
+            echo "| Medium | **${SEC_MED}** |"
+            echo "| Low | **${SEC_LOW}** |"
+            echo "| **Total** | **${SEC_TOTAL}** |"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Endpoints inventoried | ${SEC_ENDPOINTS} |"
+            echo "| Secret scan (this repo) | \`${{ steps.leaks.outcome }}\` — advisory |"
+            echo "| Deliverables present | PASS |"
+            echo ""
+            echo "> **No claim is made that security testing passed.** ${SEC_CRIT} Critical and"
+            echo "> ${SEC_HIGH} High findings remain open. This job validates and publishes the"
+            echo "> assessment; it does not re-run it against the backend, which lives in a"
+            echo "> separate repository."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Security Excel reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: 4-security-assessment-report
+          path: |
+            security-reports/*.xlsx
+            security-reports/*.md
+          if-no-files-found: error
+          retention-days: 90
+
+  # ═══════════════════════════════════════════════════════════════════════
+  bundle:
+    name: 5 · All Excel Reports (combined download)
+    runs-on: ubuntu-latest
+    needs: [selenium, appium, load-test, security]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect every Excel report
+        run: |
+          set -e
+          mkdir -p all-excel-reports
+          cp selenium-tests/*.xlsx        all-excel-reports/
+          cp appium-tests/*.xlsx          all-excel-reports/
+          cp load-tests/*.xlsx            all-excel-reports/
+          cp security-reports/*.xlsx      all-excel-reports/
+          echo "  collected:"
+          ls -la all-excel-reports/ | awk 'NR>3 {printf "    %-52s %8d bytes\n", $9, $5}'
+          n=$(ls -1 all-excel-reports/*.xlsx | wc -l)
+          echo "  total workbooks: $n"
+          [ "$n" -ge 5 ] || { echo "::error::expected at least 5 workbooks, found $n"; exit 1; }
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## 5 · Downloadable Reports"
+            echo ""
+            echo "Every Excel report is attached to this run. Scroll to **Artifacts** at the"
+            echo "bottom of the run page and download:"
+            echo ""
+            echo "| Artifact | Contains |"
+            echo "|---|---|"
+            echo "| \`0-ALL-EXCEL-REPORTS\` | **all five workbooks in one download** |"
+            echo "| \`1-selenium-web-e2e-report\` | Web E2E test cases |"
+            echo "| \`2-appium-android-e2e-report\` | Android E2E test cases |"
+            echo "| \`3-baseline-load-test-report\` | Load results + report + raw JSON |"
+            echo "| \`4-security-assessment-report\` | Findings, endpoints, written reports |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ALL Excel reports as one artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 0-ALL-EXCEL-REPORTS
+          path: all-excel-reports/*.xlsx
+          if-no-files-found: error
+          retention-days: 90

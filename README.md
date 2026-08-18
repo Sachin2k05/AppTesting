@@ -101,10 +101,29 @@ result above.
 
 ## Continuous Integration
 
-**`test-reports.yml`** — runs on every push and pull request. It verifies all
-deliverables exist, syntax-checks the suites, validates the load-test result
-against the acceptance criteria, counts documented cases, publishes a summary
-and uploads everything as artifacts.
+**`test-reports.yml`** — runs on every push and pull request, with **one job per
+test discipline**:
+
+| Job | Excel artifact |
+|---|---|
+| 1 · Selenium — Web E2E | `1-selenium-web-e2e-report` |
+| 2 · Appium — Android E2E | `2-appium-android-e2e-report` |
+| 3 · Baseline Load Test | `3-baseline-load-test-report` |
+| 4 · Security Assessment | `4-security-assessment-report` |
+| 5 · Combined bundle | **`0-ALL-EXCEL-REPORTS`** — all five workbooks in one download |
+
+### Downloading the Excel reports
+
+Open **Actions → Test Reports → the latest run**, scroll to **Artifacts** at the
+bottom of the page, and download `0-ALL-EXCEL-REPORTS` for everything at once,
+or an individual artifact for one discipline. Artifacts are retained 90 days.
+
+Jobs 3 and 4 do real verification: the load-test job asserts all twelve
+acceptance criteria against the raw JSON and cross-checks the workbook against
+it, failing the build on any mismatch. Jobs 1 and 2 validate and publish their
+suites but **do not execute them live** — Selenium needs the web app served and
+Appium needs a physical Android device, neither of which exists on a hosted
+runner. Each job states this in its own summary.
 
 **`security-review.yml`** — manual dispatch only. It scans a *backend*
 codebase; this repository holds reports, so running it here automatically would

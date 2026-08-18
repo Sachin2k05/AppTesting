@@ -1,0 +1,33 @@
+{
+  "name": "voicehire-appium-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Appium E2E tests for the VoiceHire Android app. Isolated from the app: installing here adds nothing to mobile/, voice_hire_v2/ or voicehire-backend/.",
+  "scripts": {
+    "test": "node tests/app-tests.js",
+    "test:app": "node tests/app-tests.js",
+    "appium": "appium",
+    "driver:install": "appium driver install uiautomator2",
+    "doctor": "appium driver doctor uiautomator2"
+  },
+  "dependencies": {
+    "appium": "^2.11.3",
+    "appium-uiautomator2-driver": "^3.7.3",
+    "webdriverio": "^8.40.3"
+  },
+  "_notes": [
+    "Run `npm install` in THIS folder only.",
+    "One-time driver setup:  npx appium driver install uiautomator2",
+    "Start the server in a second terminal:  npx appium",
+    "Then:  npm test",
+    "",
+    "The app must already be installed on the device, or pass APP_PATH to install it:",
+    "  APP_PATH=../mobile/android/app/build/outputs/apk/release/app-release.apk npm test",
+    "",
+    "DEVICE=RMX2193 npm test         target a specific device",
+    "APPIUM_PORT=4723               override the server port",
+    "",
+    "Requires a real device or emulator visible to `adb devices`.",
+    "Selectors use accessibility ids taken from the app's accessibilityLabel props."
+  ]
+}

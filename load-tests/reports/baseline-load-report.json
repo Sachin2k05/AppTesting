@@ -1,0 +1,117 @@
+{
+  "target": "http://localhost:3001",
+  "virtualUsers": 100,
+  "durationSeconds": 60.007,
+  "warmupSecondsExcluded": 5,
+  "executedAt": "2026-08-17T15:39:32.389Z",
+  "requestsPerSecond": 100.4,
+  "totalRequests": 6022,
+  "failedRequests": 0,
+  "errorRatePercent": 0,
+  "responseTimeMs": {
+    "count": 6022,
+    "min": 483,
+    "avg": 936.6,
+    "p50": 766.8,
+    "p95": 1254.4,
+    "p99": 7023.2,
+    "max": 10203.6
+  },
+  "perEndpoint": [
+    {
+      "name": "GET /api/jobs",
+      "path": "/api/jobs",
+      "metrics": {
+        "count": 1791,
+        "min": 502.5,
+        "avg": 1144.1,
+        "p50": 784.4,
+        "p95": 6844.3,
+        "p99": 7395.9,
+        "max": 10203.6
+      },
+      "statusCodes": {
+        "200": 1791
+      },
+      "errors": 0
+    },
+    {
+      "name": "GET /api/matching/recommendations",
+      "path": "/api/matching/recommendations",
+      "metrics": {
+        "count": 1220,
+        "min": 486.1,
+        "avg": 836.3,
+        "p50": 756.1,
+        "p95": 1160.4,
+        "p99": 2814.9,
+        "max": 5529.3
+      },
+      "statusCodes": {
+        "200": 1220
+      },
+      "errors": 0
+    },
+    {
+      "name": "GET /api/tracker/dashboard",
+      "path": "/api/tracker/dashboard",
+      "metrics": {
+        "count": 1192,
+        "min": 483,
+        "avg": 851.3,
+        "p50": 759.2,
+        "p95": 1198.3,
+        "p99": 2905.4,
+        "max": 5555.1
+      },
+      "statusCodes": {
+        "200": 1192
+      },
+      "errors": 0
+    },
+    {
+      "name": "GET /api/notifications",
+      "path": "/api/notifications",
+      "metrics": {
+        "count": 1241,
+        "min": 502.9,
+        "avg": 858.6,
+        "p50": 763.7,
+        "p95": 1216.1,
+        "p99": 2740.4,
+        "max": 5661.7
+      },
+      "statusCodes": {
+        "200": 1241
+      },
+      "errors": 0
+    },
+    {
+      "name": "GET /api/auth/me (unauthenticated)",
+      "path": "/api/auth/me",
+      "metrics": {
+        "count": 578,
+        "min": 483.4,
+        "avg": 849.2,
+        "p50": 765.3,
+        "p95": 1298.5,
+        "p99": 2744.9,
+        "max": 5350.4
+      },
+      "statusCodes": {
+        "401": 578
+      },
+      "errors": 0
+    }
+  ],
+  "generator": {
+    "eventLoopLagAvgMs": 6,
+    "eventLoopLagMaxMs": 139.9,
+    "clientLimited": false
+  },
+  "excludedEndpoints": [
+    "/api/jobs/ai and /api/jobs/intent — each call bills a real Groq request",
+    "/api/applications/send-email — actually sends mail",
+    "/api/applications/generate-resume — CPU-bound PDF work would dominate the numbers"
+  ]
+}

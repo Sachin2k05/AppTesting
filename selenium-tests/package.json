@@ -1,0 +1,22 @@
+{
+  "name": "voicehire-selenium-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Selenium E2E tests for the VoiceHire web front end. Isolated from the app: installing here adds nothing to voice_hire_v2, voicehire-backend or mobile.",
+  "scripts": {
+    "test": "node tests/login-tests.js",
+    "test:headed": "cross-env-shell HEADLESS=false node tests/login-tests.js",
+    "test:login": "node tests/login-tests.js"
+  },
+  "dependencies": {
+    "selenium-webdriver": "^4.27.0"
+  },
+  "_notes": [
+    "Run `npm install` in THIS folder only.",
+    "The app must be served first:  cd voice_hire_v2 && npm start   (http://localhost:8080)",
+    "Override the target with BASE_URL, e.g. BASE_URL=http://localhost:3001 npm test",
+    "Watch the browser with HEADLESS=false npm test",
+    "selenium-webdriver 4.x resolves its own driver via Selenium Manager, so no",
+    "separate chromedriver download is required as long as Chrome is installed."
+  ]
+}
